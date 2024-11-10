@@ -1,4 +1,6 @@
-from dataclasses import dataclass
+# agents/__init__.py
+
+from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
 from typing import List, Dict, Optional
@@ -12,21 +14,21 @@ class CompanyAnalysis:
     market_position: str
     competitors: List[str]
     ai_readiness: float
-    timestamp: datetime
+    timestamp: datetime = field(default_factory=datetime.now)
+    trends: str = ""
 
 @dataclass
 class UseCase:
     title: str
     description: str
     impact: str
-    business_impact: str
     complexity: str
     timeline: str
-    priority_score: float
-    required_resources: List[str]
-    data_sources: List[str]
-    implementation_steps: List[str]
-    challenges: List[str]
+    priority_score: float = 0.0
+    required_resources: List[str] = field(default_factory=list)
+    data_sources: List[str] = field(default_factory=list)
+    implementation_steps: List[str] = field(default_factory=list)
+    challenges: List[str] = field(default_factory=list)
 
 class ResourceType(Enum):
     DATASET = "dataset"
