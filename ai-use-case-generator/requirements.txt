@@ -5,3 +5,4 @@ streamlit
 tavily-python
 markdown
 python-dotenv
+aiohttp

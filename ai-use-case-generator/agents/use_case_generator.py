@@ -1,34 +1,32 @@
 from chromadb import PersistentClient
 from langchain_openai import ChatOpenAI
+from typing import Dict, List
+import asyncio
+from chromadb import PersistentClient
+from langchain_openai import ChatOpenAI
+from . import CompanyAnalysis, UseCase
 
-
-class UseCaseGenerator:
-    def __init__(self):
-        self.llm = ChatOpenAI(model="gpt-4-turbo-preview")
-        self.db = PersistentClient(path="./chroma_db")
+class EnhancedUseCaseGenerator:
+    def __init__(self, config: Dict):
+        self.llm = ChatOpenAI(model="gpt-4o")
+        self.db = PersistentClient(path=config["chroma_path"])
         self.collection = self.db.get_or_create_collection("use_cases")
-    
-    def generate_use_cases(self, company_analysis: Dict) -> List[Dict]:
-        prompt = f"""
-        Based on the following company analysis, generate specific AI/ML use cases:
-        {company_analysis['analysis']}
+
+    async def generate_use_cases(self, analysis: CompanyAnalysis) -> List[UseCase]:
+
+        use_cases = await self._generate_initial_use_cases(analysis)
         
-        For each use case provide:
-        1. Title
-        2. Description
-        3. Business Impact
-        4. Implementation Complexity (High/Medium/Low)
-        5. Required Resources
-        6. Estimated Timeline
-        """
+        scored_use_cases = await self._score_use_cases(use_cases, analysis)
         
-        response = self.llm.invoke(prompt)
+        self._store_use_cases(analysis.company_name, scored_use_cases)
         
-        # Store use cases in ChromaDB
-        self.collection.add(
-            documents=[str(response.content)],
-            metadatas=[{"company": company_analysis['company'], "type": "use_cases"}],
-            ids=[f"{company_analysis['company']}_use_cases"]
-        )
+        return scored_use_cases
+
+    async def _score_use_cases(self, use_cases: List[UseCase], analysis: CompanyAnalysis) -> List[UseCase]:
+
+        for use_case in use_cases:
+            use_case.priority_score = await self._calculate_priority_score(
+                use_case, analysis
+            )
         
-        return response.content
+        return sorted(use_cases, key=lambda x: x.priority_score, reverse=True)
