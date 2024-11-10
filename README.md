@@ -20,6 +20,6 @@ In Terminal run these:-
 ```sh
 git clone https://github.com/mayanku1111/Lang-Multi-Agent/
 cd ai-use-case-generator
-pip install -r [requirements.txt]
+pip install -r requirements.txt
 streamlit run streamlit_app.py
 
