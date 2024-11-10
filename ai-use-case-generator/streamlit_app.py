@@ -53,6 +53,11 @@ class WorkflowManager:
                 state["use_cases"],
                 state["resources"]
             )
+            self.report_gen.save_resources(
+                state["company"],
+                state["resources"],
+                f"{state['company']}_resources.md"
+            )   
             return state
 
         workflow.add_node("research", research)

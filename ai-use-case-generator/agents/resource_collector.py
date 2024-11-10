@@ -1,5 +1,3 @@
-# resource_collector.py
-
 from typing import Dict, List, Optional
 from langchain_community.tools import TavilySearchResults
 import asyncio
@@ -18,7 +16,7 @@ class UseCase:
 
 class ResourceType(Enum):
     DATASET = "dataset"
-    DOCUMENTATION = "documentation"
+    DOCUMENTATION = "documentation" 
     GITHUB_REPO = "github_repo"
     RESEARCH_PAPER = "research_paper"
 
@@ -63,3 +61,93 @@ class EnhancedResourceCollector:
             if self.session and not self.session.closed:
                 await self.session.close()
         return resources
+
+    async def _search_datasets(self, use_case: UseCase) -> List[Dict]:
+        """Search for relevant datasets."""
+        datasets = []
+        try:
+            query = f"dataset machine learning {use_case.title} {use_case.description}"
+            results = await self.search_tool.ainvoke({"query": query})
+            
+            for result in results:
+                if any(term in result["url"].lower() for term in ["kaggle.com", "huggingface.co", "data.gov", "github"]):
+                    datasets.append({
+                        "type": ResourceType.DATASET,
+                        "title": result["title"],
+                        "url": result["url"],
+                        "description": result["snippet"],
+                        "relevance_score": result.get("relevance_score", 0.0),
+                        "use_case_id": use_case.title
+                    })
+            
+            return datasets[:5]  # Return top 5 most relevant datasets
+            
+        except Exception as e:
+            self.logger.error(f"Dataset search error for {use_case.title}: {str(e)}")
+            return []
+
+    async def _search_documentation(self, use_case: UseCase) -> List[Dict]:
+        """Search for relevant documentation and tutorials."""
+        try:
+            query = f"tutorial documentation guide {use_case.title} machine learning AI implementation"
+            results = await self.search_tool.ainvoke({"query": query})
+            
+            docs = []
+            for result in results:
+                if any(term in result["url"].lower() for term in [
+                    "docs.", "documentation", "guide", "tutorial", "blog.", "medium.com"
+                ]):
+                    docs.append({
+                        "type": ResourceType.DOCUMENTATION,
+                        "title": result["title"],
+                        "url": result["url"],
+                        "description": result["snippet"],
+                        "relevance_score": result.get("relevance_score", 0.0),
+                        "use_case_id": use_case.title
+                    })
+            
+            return docs[:5]
+            
+        except Exception as e:
+            self.logger.error(f"Documentation search error for {use_case.title}: {str(e)}")
+            return []
+
+    async def _search_github(self, use_case: UseCase) -> List[Dict]:
+        """Search for relevant GitHub repositories."""
+        try:
+            if not self.github_token:
+                return []
+                
+            if not self.session:
+                self.session = aiohttp.ClientSession()
+                
+            headers = {
+                "Authorization": f"token {self.github_token}",
+                "Accept": "application/vnd.github.v3+json"
+            }
+            
+            query = f"{use_case.title} machine learning"
+            url = f"https://api.github.com/search/repositories?q={query}&sort=stars&order=desc"
+            
+            async with self.session.get(url, headers=headers) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    repos = []
+                    
+                    for repo in data["items"][:5]:
+                        repos.append({
+                            "type": ResourceType.GITHUB_REPO,
+                            "title": repo["full_name"],
+                            "url": repo["html_url"],
+                            "description": repo["description"] or "",
+                            "relevance_score": 0.8,
+                            "use_case_id": use_case.title
+                        })
+                        
+                    return repos
+                    
+            return []
+            
+        except Exception as e:
+            self.logger.error(f"GitHub search error for {use_case.title}: {str(e)}")
+            return []

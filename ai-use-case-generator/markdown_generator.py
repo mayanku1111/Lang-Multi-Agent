@@ -42,12 +42,27 @@ AI Readiness Score: {analysis_dict.get('ai_readiness', 0.0)}
     def _format_resources(self, resources: Dict) -> str:
         markdown = ""
         if resources.get('datasets'):
-            markdown += "\nDatasets:\n"
+            markdown += "\n##### Datasets\n"
             for dataset in resources['datasets']:
-                markdown += f"- [{dataset['title']}]({dataset['url']})\n"
+                markdown += f"- [{dataset['title']}]({dataset['url']}) - {dataset['description']}\n"
         
         if resources.get('documentation'):
-            markdown += "\nDocumentation & Guides:\n"
+            markdown += "\n##### Documentation & References\n"
             for doc in resources['documentation']:
-                markdown += f"- [{doc['title']}]({doc['url']})\n"
-        return markdown
+                markdown += f"- [{doc['title']}]({doc['url']}) - {doc['description']}\n"
+
+        if resources.get('github'):
+            markdown += "\n##### GitHub Repositories\n"
+            for repo in resources['github']:
+                markdown += f"- [{repo['title']}]({repo['url']}) - {repo['description']}\n"
+    
+        return markdown        
+
+
+    def save_resources(self, company: str, resources: Dict, output_path: str = "resources.md"):
+        with open(output_path, "w") as f:
+            f.write(f"# AI Resources for {company}\n\n")
+            for use_case_title, use_case_resources in resources.items():
+                f.write(f"## {use_case_title}\n")
+                f.write(self._format_resources(use_case_resources))
+                f.write("\n---\n\n")

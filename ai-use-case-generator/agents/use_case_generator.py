@@ -190,3 +190,36 @@ class EnhancedUseCaseGenerator:
         except Exception as e:
             self.logger.error(f"Error generating use cases: {str(e)}")
             raise
+
+    async def _search_datasets(self, use_case: UseCase) -> List[Dict]:
+        datasets = []
+        search_query = f"dataset {use_case.title} machine learning AI"
+    
+    # Search Kaggle datasets
+        if self.config["kaggle_api"]:
+            try:
+                kaggle_results = await self._search_kaggle(search_query)
+                datasets.extend(kaggle_results)
+            except Exception as e:
+                self.logger.error(f"Kaggle search error: {str(e)}")
+    
+    # Search Hugging Face datasets
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"https://huggingface.co/api/datasets?search={search_query}"
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        results = await response.json()
+                        for result in results[:5]:
+                            datasets.append({
+                            'type': ResourceType.DATASET,
+                            'title': result['name'],
+                            'url': f"https://huggingface.co/datasets/{result['id']}",
+                            'description': result.get('description', ''),
+                            'relevance_score': 0.8,
+                            'use_case_id': use_case.title
+                        })
+        except Exception as e:
+            self.logger.error(f"HuggingFace search error: {str(e)}")
+    
+        return datasets 
