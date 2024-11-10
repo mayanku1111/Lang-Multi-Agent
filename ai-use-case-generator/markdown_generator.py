@@ -1,3 +1,5 @@
+from typing import Dict, List
+
 class MarkdownGenerator:
     @staticmethod
     def generate_report(company: str, analysis: Dict, use_cases: List[Dict], resources: Dict) -> str:
