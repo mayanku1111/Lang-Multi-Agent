@@ -18,12 +18,15 @@ class CompanyAnalysis:
 class UseCase:
     title: str
     description: str
+    impact: str
     business_impact: str
     complexity: str
     timeline: str
     priority_score: float
     required_resources: List[str]
+    data_sources: List[str]
     implementation_steps: List[str]
+    challenges: List[str]
 
 class ResourceType(Enum):
     DATASET = "dataset"

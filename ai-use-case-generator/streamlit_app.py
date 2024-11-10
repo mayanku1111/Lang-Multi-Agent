@@ -1,4 +1,5 @@
 # streamlit_app.py
+import json
 import streamlit as st
 import asyncio
 import logging
@@ -105,6 +106,8 @@ async def main():
                     file_name=f"{company}_analysis.md",
                     mime="text/markdown"
                 )
+            except json.JSONDecodeError as e:
+                st.error(f"Error parsing AI response: {str(e)}")
             except Exception as e:
                 st.error(f"An error occurred: {str(e)}")
 
