@@ -11,3 +11,17 @@
 <img width="1410" alt="Screenshot 2024-11-10 at 11 04 19 PM" src="https://github.com/user-attachments/assets/e4e971a1-d649-4011-aeb3-04b45b59c686">
 
 Full output :- [Amazon company](Amazon_analysis.md)
+
+
+### Getting started
+
+In Terminal run these:-
+
+`
+git clone https://github.com/mayanku1111/Lang-Multi-Agent/
+cd ai-use-case-generator
+pip install -r requirements.txt
+`
+`
+streamlit run streamlit_app.py
+`
