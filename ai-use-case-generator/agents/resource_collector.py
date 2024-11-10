@@ -1,72 +1,79 @@
-from langchain_openai import ChatOpenAI
-from typing import Dict, List, Optional
+# resource_collector.py
+
 import asyncio
 import aiohttp
 import logging
+from typing import Dict, List, Optional
 from langchain_community.tools import TavilySearchResults
-from . import UseCase, Resource
+from . import UseCase, Resource, ResourceType
 
 class EnhancedResourceCollector:
     def __init__(self, config: Dict):
-        # Initialize logging
         self.logger = logging.getLogger(__name__)
-        
-        # Initialize APIs with proper error handling
         try:
             self.search_tool = TavilySearchResults(api_key=config.get("tavily_api_key"))
+            self.github_token = config.get("github_api")
+            self.kaggle_username = config.get("kaggle_username")
+            self.kaggle_key = config.get("kaggle_api")
+            self.session = None
+            self.max_retries = 3
+            self.retry_delay = 1
         except Exception as e:
-            self.logger.error(f"Failed to initialize Tavily search: {str(e)}")
+            self.logger.error(f"Failed to initialize ResourceCollector: {str(e)}")
             raise
 
-        # Store API configurations
-        self.github_token = config.get("github_api_token")
-        self.kaggle_username = config.get("kaggle_username")
-        self.kaggle_key = config.get("kaggle_key")
-        
-        # Initialize session
-        self.session = None
-
     async def _init_session(self):
-        """Initialize aiohttp session if not already created"""
-        if self.session is None:
-            self.session = aiohttp.ClientSession()
+        """Initialize aiohttp session with retry logic."""
+        try:
+            if self.session is None or self.session.closed:
+                self.session = aiohttp.ClientSession()
+        except Exception as e:
+            self.logger.error(f"Failed to initialize session: {str(e)}")
+            raise
 
     async def _cleanup_session(self):
-        """Cleanup aiohttp session"""
-        if self.session is not None:
-            await self.session.close()
-            self.session = None
+        """Safely cleanup aiohttp session."""
+        if self.session and not self.session.closed:
+            try:
+                await self.session.close()
+            except Exception as e:
+                self.logger.error(f"Error closing session: {str(e)}")
+            finally:
+                self.session = None
 
-    async def collect_resources(self, use_cases: List[UseCase]) -> Dict[str, List[Resource]]:
-        """Collect resources for given use cases with proper error handling"""
-        resources = {}
+    async def collect_resources(self, use_cases: List[UseCase]) -> List[Resource]:
+        """Collect resources for use cases with improved error handling."""
+        if not use_cases:
+            self.logger.warning("No use cases provided")
+            return []
+
+        all_resources = []
         
         try:
             await self._init_session()
             
             for use_case in use_cases:
                 try:
-                    # Gather resources with individual error handling
-                    gathered_resources = await asyncio.gather(
+                    # Gather resources concurrently for each use case
+                    resource_tasks = [
                         self._search_datasets(use_case),
-                        self._search_github(use_case),
                         self._search_documentation(use_case),
-                        return_exceptions=True
-                    )
+                        self._search_github(use_case)
+                    ]
                     
-                    # Filter out errors and flatten valid results
-                    valid_resources = []
-                    for result in gathered_resources:
+                    results = await asyncio.gather(*resource_tasks, return_exceptions=True)
+                    
+                    # Process results and handle exceptions
+                    for result in results:
                         if isinstance(result, Exception):
-                            self.logger.error(f"Error collecting resources for {use_case.title}: {str(result)}")
-                        elif isinstance(result, list):
-                            valid_resources.extend(result)
-                    
-                    resources[use_case.title] = valid_resources
-
+                            self.logger.error(f"Error gathering resources: {str(result)}")
+                            continue
+                        if isinstance(result, list):
+                            all_resources.extend(result)
+                            
                 except Exception as e:
                     self.logger.error(f"Error processing use case {use_case.title}: {str(e)}")
-                    resources[use_case.title] = []
+                    continue
                     
         except Exception as e:
             self.logger.error(f"Critical error in collect_resources: {str(e)}")
@@ -74,107 +81,138 @@ class EnhancedResourceCollector:
         finally:
             await self._cleanup_session()
             
-        return resources
+        return all_resources
+
+    async def _search_with_retry(self, query: str) -> List[Dict]:
+        """Search with retry logic."""
+        for attempt in range(self.max_retries):
+            try:
+                return await self.search_tool.ainvoke({"query": query})
+            except Exception as e:
+                if attempt == self.max_retries - 1:
+                    self.logger.error(f"Search failed after {self.max_retries} attempts: {str(e)}")
+                    return []
+                await asyncio.sleep(self.retry_delay * (attempt + 1))
+        return []
+
+    async def _validate_resource(self, resource: Resource) -> bool:
+        """Validate resource URL with retry logic."""
+        for attempt in range(self.max_retries):
+            try:
+                if not self.session or self.session.closed:
+                    await self._init_session()
+                    
+                async with self.session.head(
+                    resource.url, 
+                    allow_redirects=True, 
+                    timeout=10
+                ) as response:
+                    return response.status == 200
+            except Exception as e:
+                if attempt == self.max_retries - 1:
+                    self.logger.debug(f"Resource validation failed for {resource.url}: {str(e)}")
+                    return False
+                await asyncio.sleep(self.retry_delay * (attempt + 1))
+        return False
 
     async def _search_datasets(self, use_case: UseCase) -> List[Resource]:
-        """Search for relevant datasets"""
+        """Search for datasets with improved error handling."""
         try:
-            if not self.kaggle_username or not self.kaggle_key:
-                self.logger.warning("Kaggle credentials not provided")
-                return []
-
-            # Implement dataset search logic here
-            # This is a placeholder implementation
-            query = f"{use_case.title} {use_case.description} dataset"
-            results = await self.search_tool.ainvoke({"query": query})
+            query = f"{use_case.title} dataset data repository"
+            results = await self._search_with_retry(query)
             
-            return [
-                Resource(
-                    title=result.get("title", ""),
-                    url=result.get("url", ""),
-                    type="dataset",
-                    description=result.get("snippet", "")
-                )
-                for result in results
-                if await self._validate_resource(Resource(
-                    title=result.get("title", ""),
-                    url=result.get("url", ""),
-                    type="dataset",
-                    description=result.get("snippet", "")
-                ))
-            ]
-            
+            validated_resources = []
+            for result in results:
+                try:
+                    resource = Resource(
+                        type=ResourceType.DATASET,
+                        title=result.get("title", ""),
+                        url=result.get("url", ""),
+                        description=result.get("snippet", ""),
+                        relevance_score=result.get("relevance_score", 0.0),
+                        use_case_id=use_case.title
+                    )
+                    if await self._validate_resource(resource):
+                        validated_resources.append(resource)
+                except Exception as e:
+                    self.logger.error(f"Error processing dataset result: {str(e)}")
+                    continue
+                    
+            return validated_resources
         except Exception as e:
             self.logger.error(f"Error in _search_datasets: {str(e)}")
             return []
 
-    async def _search_github(self, use_case: UseCase) -> List[Resource]:
-        """Search for relevant GitHub repositories"""
-        try:
-            if not self.github_token:
-                self.logger.warning("GitHub token not provided")
-                return []
-
-            headers = {
-                "Authorization": f"token {self.github_token}",
-                "Accept": "application/vnd.github.v3+json"
-            }
-
-            query = f"{use_case.title} {use_case.description}"
-            async with self.session.get(
-                f"https://api.github.com/search/repositories?q={query}",
-                headers=headers
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return [
-                        Resource(
-                            title=repo["name"],
-                            url=repo["html_url"],
-                            type="github_repo",
-                            description=repo.get("description", "")
-                        )
-                        for repo in data.get("items", [])[:5]  # Limit to top 5 results
-                    ]
-                else:
-                    self.logger.error(f"GitHub API error: {response.status}")
-                    return []
-                    
-        except Exception as e:
-            self.logger.error(f"Error in _search_github: {str(e)}")
-            return []
-
     async def _search_documentation(self, use_case: UseCase) -> List[Resource]:
-        """Search for relevant documentation"""
+        """Search for documentation with improved error handling."""
         try:
-            query = f"{use_case.title} {use_case.description} documentation tutorial"
-            results = await self.search_tool.ainvoke({"query": query})
+            query = f"{use_case.title} tutorial documentation guide"
+            results = await self._search_with_retry(query)
             
-            return [
-                Resource(
-                    title=result.get("title", ""),
-                    url=result.get("url", ""),
-                    type="documentation",
-                    description=result.get("snippet", "")
-                )
-                for result in results
-                if await self._validate_resource(Resource(
-                    title=result.get("title", ""),
-                    url=result.get("url", ""),
-                    type="documentation",
-                    description=result.get("snippet", "")
-                ))
-            ]
-            
+            validated_resources = []
+            for result in results:
+                try:
+                    resource = Resource(
+                        type=ResourceType.DOCUMENTATION,
+                        title=result.get("title", ""),
+                        url=result.get("url", ""),
+                        description=result.get("snippet", ""),
+                        relevance_score=result.get("relevance_score", 0.0),
+                        use_case_id=use_case.title
+                    )
+                    if await self._validate_resource(resource):
+                        validated_resources.append(resource)
+                except Exception as e:
+                    self.logger.error(f"Error processing documentation result: {str(e)}")
+                    continue
+                    
+            return validated_resources
         except Exception as e:
             self.logger.error(f"Error in _search_documentation: {str(e)}")
             return []
 
-    async def _validate_resource(self, resource: Resource) -> bool:
-        """Validate if a resource URL is accessible"""
+    async def _search_github(self, use_case: UseCase) -> List[Resource]:
+        """Search GitHub repositories with improved error handling."""
+        if not self.github_token:
+            return []
+            
         try:
-            async with self.session.head(resource.url, allow_redirects=True) as response:
-                return response.status == 200
+            query = f"{use_case.title} {use_case.description}"
+            headers = {
+                "Authorization": f"token {self.github_token}",
+                "Accept": "application/vnd.github.v3+json"
+            }
+            
+            if not self.session or self.session.closed:
+                await self._init_session()
+                
+            async with self.session.get(
+                f"https://api.github.com/search/repositories?q={query}",
+                headers=headers,
+                timeout=10
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    resources = []
+                    for repo in data.get("items", [])[:5]:
+                        try:
+                            resource = Resource(
+                                type=ResourceType.GITHUB_REPO,
+                                title=repo["name"],
+                                url=repo["html_url"],
+                                description=repo.get("description", ""),
+                                relevance_score=0.8,  # Default score for GitHub repos
+                                use_case_id=use_case.title
+                            )
+                            resources.append(resource)
+                        except Exception as e:
+                            self.logger.error(f"Error processing GitHub repo: {str(e)}")
+                            continue
+                    return resources
+                else:
+                    self.logger.error(f"GitHub API returned status: {response.status}")
+                    return []
+                    
         except Exception as e:
-            self.logger.debug(f"Resource validation failed for {resource.url}: {str(e)}")
-            return False
+            self.logger.error(f"GitHub search error: {str(e)}")
+            return []
