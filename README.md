@@ -1,5 +1,7 @@
 ## Lang-Multi-Agent
 
+
+## Major Tech stack used :- Langgraph ,Langchain,Chromadb,Tavily AI
 ### This repo is about Multi-Agent architecture system that generates relevant AI and (GenAI) use cases for a given Company or Industry
 
 # Workflow 
