@@ -17,6 +17,41 @@ class CompanyAnalysis:
     timestamp: datetime = field(default_factory=datetime.now)
     trends: str = ""
 
+    def to_dict(self) -> Dict:
+        """Convert CompanyAnalysis to dictionary."""
+        return {
+            "company_name": self.company_name,
+            "industry": self.industry,
+            "business_model": self.business_model,
+            "key_products": self.key_products,
+            "market_position": self.market_position,
+            "competitors": self.competitors,
+            "ai_readiness": self.ai_readiness,
+            "trends": self.trends,
+            "timestamp": str(self.timestamp),
+            "analysis": f"""Industry: {self.industry}
+Business Model: {self.business_model}
+Key Products: {', '.join(self.key_products)}
+Market Position: {self.market_position}
+Competitors: {', '.join(self.competitors)}
+AI Readiness Score: {self.ai_readiness}"""
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'CompanyAnalysis':
+        """Create CompanyAnalysis from dictionary."""
+        return cls(
+            company_name=data["company_name"],
+            industry=data["industry"],
+            business_model=data["business_model"],
+            key_products=data["key_products"],
+            market_position=data["market_position"],
+            competitors=data["competitors"],
+            ai_readiness=float(data["ai_readiness"]),
+            trends=data.get("trends", ""),
+            timestamp=datetime.fromisoformat(data["timestamp"]) if "timestamp" in data else datetime.now()
+        )
+
 @dataclass
 class UseCase:
     title: str
