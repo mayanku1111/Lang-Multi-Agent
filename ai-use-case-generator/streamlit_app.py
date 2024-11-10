@@ -1,10 +1,10 @@
-# streamlit_app.py
 import streamlit as st
 import asyncio
 import logging
-from typing import Dict, TypedDict, Annotated
+from typing import Dict, TypedDict, Literal
 from datetime import datetime
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph, END, MessagesState
+from langgraph.checkpoint.memory import MemorySaver
 from config import CONFIG
 
 from agents.research_agent import EnhancedResearchAgent
@@ -12,7 +12,7 @@ from agents.use_case_generator import EnhancedUseCaseGenerator
 from agents.resource_collector import EnhancedResourceCollector
 from markdown_generator import MarkdownGenerator
 
-class WorkflowState(TypedDict):
+class WorkflowState(MessagesState, TypedDict):
     company: str
     timestamp: datetime
     analysis: Dict
@@ -22,6 +22,8 @@ class WorkflowState(TypedDict):
 
 class WorkflowManager:
     def __init__(self, config: Dict):
+        """Initialize workflow manager with configuration."""
+        self.checkpointer = MemorySaver()
         self.research_agent = EnhancedResearchAgent(config)
         self.use_case_gen = EnhancedUseCaseGenerator(config)
         self.resource_collector = EnhancedResourceCollector(config)
@@ -29,10 +31,6 @@ class WorkflowManager:
         self.graph = self._create_workflow_graph()
 
     def _create_workflow_graph(self) -> StateGraph:
-        workflow = StateGraph(
-            state_schema=WorkflowState,
-        )
-
         async def research(state: WorkflowState) -> Dict:
             analysis = await self.research_agent.research_company(state["company"])
             return {"analysis": analysis}
@@ -45,35 +43,77 @@ class WorkflowManager:
             resources = await self.resource_collector.collect_resources(state["use_cases"])
             return {"resources": resources}
 
-        async def generate_report(state: WorkflowState) -> Dict:
+        def generate_report(state: WorkflowState) -> Dict:
             report = self.report_gen.generate_report(
                 state["company"],
-                state["analysis"], 
+                state["analysis"],
                 state["use_cases"],
                 state["resources"]
             )
-            return {"report": report, "__end__": True}
+            return {"report": report}
 
+        def should_continue(state: WorkflowState) -> Literal["generate_use_cases", "collect_resources", "generate_report", END]:
+            if not state.get("analysis"):
+                return "generate_use_cases"
+            elif not state.get("use_cases"):
+                return "collect_resources"
+            elif not state.get("resources"):
+                return "generate_report"
+            return END
+
+        workflow = StateGraph(WorkflowState)
+        
         # Add nodes
         workflow.add_node("research", research)
         workflow.add_node("generate_use_cases", generate_use_cases)
-        workflow.add_node("collect_resources", collect_resources) 
+        workflow.add_node("collect_resources", collect_resources)
         workflow.add_node("generate_report", generate_report)
 
-        # Add edges
-        workflow.add_edge("research", "generate_use_cases")
-        workflow.add_edge("generate_use_cases", "collect_resources")
-        workflow.add_edge("collect_resources", "generate_report")
-        
-        # Set entry/exit
+        # Set entry point and edges
         workflow.set_entry_point("research")
-        workflow.set_finish_point("generate_report")
+        
+        workflow.add_conditional_edges(
+            "research",
+            should_continue,
+            {
+                "generate_use_cases": "generate_use_cases",
+                "collect_resources": "collect_resources",
+                "generate_report": "generate_report",
+                END: END
+            }
+        )
+        
+        workflow.add_conditional_edges(
+            "generate_use_cases",
+            should_continue,
+            {
+                "collect_resources": "collect_resources",
+                "generate_report": "generate_report",
+                END: END
+            }
+        )
+        
+        workflow.add_conditional_edges(
+            "collect_resources",
+            should_continue,
+            {
+                "generate_report": "generate_report",
+                END: END
+            }
+        )
+        
+        workflow.add_conditional_edges(
+            "generate_report",
+            should_continue,
+            {END: END}
+        )
 
-        return workflow
+        return workflow.compile(checkpointer=self.checkpointer)
 
     async def run_workflow(self, company: str) -> str:
         try:
-            initial_state = {
+            initial_state: WorkflowState = {
+                "messages": [],
                 "company": company,
                 "timestamp": datetime.now(),
                 "analysis": {},
@@ -82,13 +122,24 @@ class WorkflowManager:
                 "report": ""
             }
             
-            result = await self.graph.ainvoke(initial_state)
-            return result["report"]
+            config = {
+                "configurable": {
+                    "thread_id": company,
+                },
+                "recursion_limit": 50
+            }
+            
+            result = await self.graph.ainvoke(initial_state, config=config)
+            
+            if isinstance(result, dict) and "report" in result:
+                return result["report"]
+            raise ValueError("Workflow failed to generate report")
+            
         except Exception as e:
             logging.error(f"Workflow error: {str(e)}")
             raise
 
-def main():
+async def main():
     st.title("AI Use Case Generator")
     
     workflow_manager = WorkflowManager(CONFIG)
@@ -98,25 +149,20 @@ def main():
     if st.button("Generate Analysis"):
         with st.spinner("Analyzing..."):
             try:
-                report = asyncio.run(workflow_manager.run_workflow(company))
-                
+                report = await workflow_manager.run_workflow(company)
                 st.markdown(report)
-                
                 st.download_button(
                     label="Download Report",
                     data=report,
                     file_name=f"{company}_analysis.md",
                     mime="text/markdown"
                 )
-                
             except Exception as e:
                 st.error(f"An error occurred: {str(e)}")
 
 if __name__ == "__main__":
-
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    
-    main()
+    asyncio.run(main())
