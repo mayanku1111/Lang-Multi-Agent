@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import json
 from typing import Dict, List, Optional
 from datetime import datetime
 from langchain_core.prompts import ChatPromptTemplate
@@ -12,17 +13,18 @@ class EnhancedUseCaseGenerator:
         """Initialize the use case generator with configuration."""
         self.logger = logging.getLogger(__name__)
         self.llm = ChatOpenAI(
-            model=config.get("model_name", "gpt-4"),
+            model=config.get("model_name", "gpt-4o"),
             api_key=config["openai_api_key"],
             temperature=0.7
         )
         self.db = PersistentClient(path=config["chroma_path"])
         self.collection = self.db.get_or_create_collection("use_cases")
         
-        # Create use case generation prompt template
+        # Updated prompt to ensure proper JSON formatting
         self.use_case_prompt = ChatPromptTemplate.from_messages([
             ("system", """You are an AI solution architect specializing in identifying valuable AI use cases for businesses.
-            Generate specific, actionable AI use cases based on the company analysis provided."""),
+            Generate specific, actionable AI use cases based on the company analysis provided.
+            You must respond with a valid JSON array containing exactly 5 use cases."""),
             ("human", """
             Company Analysis:
             Company: {company_name}
@@ -32,28 +34,32 @@ class EnhancedUseCaseGenerator:
             AI Readiness: {ai_readiness}
 
             Generate 5 specific AI use cases that could benefit this company.
-            Each use case should include:
-            1. Title
-            2. Description
-            3. Expected Impact
-            4. Implementation Complexity (1-5)
-            5. Required Data Sources
-            6. Key Challenges
-
-            Format the response as a list of JSON objects.
+            Each use case should be a JSON object with these exact keys:
+            - title
+            - description
+            - expected_impact
+            - implementation_complexity (integer 1-5)
+            - data_sources (array of strings)
+            - key_challenges (array of strings)
+            
+            Respond with only the JSON array. No other text or formatting.
             """)
         ])
 
-    async def generate_use_cases(self, analysis: CompanyAnalysis) -> List[UseCase]:
-        """Generate and process AI use cases for a company."""
-        try:
-            initial_use_cases = await self._generate_initial_use_cases(analysis)
-            scored_use_cases = await self._score_use_cases(initial_use_cases, analysis)
-            self._store_use_cases(analysis.company_name, scored_use_cases)
-            return scored_use_cases
-        except Exception as e:
-            self.logger.error(f"Error generating use cases: {str(e)}")
-            raise
+    def _clean_json_response(self, response: str) -> str:
+        """Clean and validate JSON response from LLM."""
+        # Remove any leading/trailing whitespace and newlines
+        cleaned = response.strip()
+        
+        # If response is wrapped in ```, remove them
+        if cleaned.startswith("```") and cleaned.endswith("```"):
+            cleaned = cleaned[3:-3].strip()
+            
+        # If response starts with "json", remove it
+        if cleaned.startswith("json"):
+            cleaned = cleaned[4:].strip()
+            
+        return cleaned
 
     async def _generate_initial_use_cases(self, analysis: CompanyAnalysis) -> List[UseCase]:
         """Generate initial use cases using LLM."""
@@ -69,22 +75,33 @@ class EnhancedUseCaseGenerator:
                 "ai_readiness": analysis.ai_readiness
             })
             
-            # Parse response into UseCase objects
+            # Clean and parse the JSON response
+            cleaned_response = self._clean_json_response(response.content)
+            use_case_data = json.loads(cleaned_response)
+            
+            # Validate that we got a list
+            if not isinstance(use_case_data, list):
+                raise ValueError("Expected JSON array of use cases")
+            
+            # Parse into UseCase objects
             use_cases = []
-            for case in eval(response.content):
+            for case in use_case_data:
                 use_case = UseCase(
-                    title=case["Title"],
-                    description=case["Description"],
-                    expected_impact=case["Expected Impact"],
-                    complexity=case["Implementation Complexity"],
-                    data_sources=case["Required Data Sources"],
-                    challenges=case["Key Challenges"],
+                    title=case["title"],
+                    description=case["description"],
+                    expected_impact=case["expected_impact"],
+                    complexity=int(case["implementation_complexity"]),
+                    data_sources=case["data_sources"],
+                    challenges=case["key_challenges"],
                     priority_score=0.0  # Will be calculated later
                 )
                 use_cases.append(use_case)
                 
             return use_cases
             
+        except json.JSONDecodeError as e:
+            self.logger.error(f"JSON parsing error: {str(e)}, Response: {cleaned_response}")
+            raise
         except Exception as e:
             self.logger.error(f"Error in initial use case generation: {str(e)}")
             raise
@@ -94,7 +111,7 @@ class EnhancedUseCaseGenerator:
         try:
             # Create scoring prompt
             scoring_prompt = ChatPromptTemplate.from_messages([
-                ("system", "You are an AI investment analyst. Score this use case's priority from 0-1."),
+                ("system", "You are an AI investment analyst. Score this use case's priority from 0-1. Respond with only the numeric score."),
                 ("human", f"""
                 Company Analysis:
                 - Industry: {analysis.industry}
@@ -113,7 +130,7 @@ class EnhancedUseCaseGenerator:
                 3. Expected ROI
                 4. Implementation complexity
                 
-                Return only a float number between 0 and 1.
+                Return only a number between 0 and 1.
                 """)
             ])
 
@@ -122,12 +139,27 @@ class EnhancedUseCaseGenerator:
             response = await chain.ainvoke({})
             
             # Parse and validate score
-            score = float(response.content.strip())
-            return max(0.0, min(1.0, score))  # Ensure score is between 0 and 1
+            try:
+                score = float(response.content.strip())
+                return max(0.0, min(1.0, score))  # Ensure score is between 0 and 1
+            except ValueError:
+                self.logger.error(f"Invalid score format received: {response.content}")
+                return 0.5
             
         except Exception as e:
             self.logger.error(f"Error calculating priority score: {str(e)}")
             return 0.5  # Default score if calculation fails
+
+    async def generate_use_cases(self, analysis: CompanyAnalysis) -> List[UseCase]:
+        """Generate and process AI use cases for a company."""
+        try:
+            initial_use_cases = await self._generate_initial_use_cases(analysis)
+            scored_use_cases = await self._score_use_cases(initial_use_cases, analysis)
+            self._store_use_cases(analysis.company_name, scored_use_cases)
+            return scored_use_cases
+        except Exception as e:
+            self.logger.error(f"Error generating use cases: {str(e)}")
+            raise
 
     async def _score_use_cases(self, use_cases: List[UseCase], analysis: CompanyAnalysis) -> List[UseCase]:
         """Score and sort use cases by priority."""
@@ -161,7 +193,7 @@ class EnhancedUseCaseGenerator:
             
             for i, use_case in enumerate(use_cases):
                 doc_id = f"{company_name}_usecase_{i}"
-                docs.append(str(use_case.__dict__))
+                docs.append(json.dumps(use_case.__dict__))  # Convert to JSON string
                 metadatas.append({
                     "company": company_name,
                     "title": use_case.title,
