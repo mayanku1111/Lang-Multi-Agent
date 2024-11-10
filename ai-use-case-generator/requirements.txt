@@ -1,0 +1,7 @@
+langchain
+langgraph
+chromadb
+streamlit
+tavily-python
+markdown
+python-dotenv
